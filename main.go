@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"time"
 )
+
 // Thank you for https://github.com/Demion/nvapioc
 func main() {
 	d := &NvapiStruct{}
@@ -21,7 +23,19 @@ func main() {
 	if err != nil {
 		log.Println(err)
 	}
-
+	log.Println("check overclock")
+	for {
+		err = d.SetOverclock(0, 0, 100)
+		if err != nil {
+			log.Println(err)
+			d.Initialize()
+		}
+		time.Sleep(time.Second * 5)
+	}
+	err = d.Unload()
+	if err != nil {
+		log.Println(err)
+	}
 	log.Println("result",data)
 }
 
@@ -38,8 +52,11 @@ type StringNvapiGpuinfo struct {
 
 type NvapiStruct struct {
 	isInitialize bool
-	BusId uint
+	BusId C.uint
 	gpuinfo *C.char
+	core C.int
+	memory C.int
+	power C.uint
 }
 
 func (n *NvapiStruct) Initialize() error {
@@ -47,12 +64,34 @@ func (n *NvapiStruct) Initialize() error {
 	if (!C.Initialize()) { return errors.New("Nvapi Initialize Faild") }
 	if (!C.EnumGpus()) { return errors.New("Nvapi NvAPI_EnumPhysicalGPUs Faild") }
 	busid := C.uint(0)
-	if (!C.GetBusId(busid, C.int(0))) { return errors.New("Nvapi NvAPI_GPU_GetBusId Faild") }
-	n.BusId = uint(busid)
+
+	if !C.GetBusId(&busid, C.int(0)) { return errors.New("Nvapi NvAPI_GPU_GetBusId Faild") }
+	n.BusId = C.uint(busid)
 	n.isInitialize = true
 	n.gpuinfo = C.CString("")
+	n.core = C.int(-1)
+	n.memory = C.int(-1)
+	n.power = C.uint(0)
 	return nil
 }
+func (n *NvapiStruct) Unload() error {
+	if !C.Unload() { return errors.New("Unload Fail") }
+	return nil
+}
+func (n *NvapiStruct) SetOverclock(Core int, Memory int, Power int, Busid ...uint) error {
+	busid := n.BusId
+	if len(Busid) == 1 {
+		busid = C.uint(Busid[0])
+	}
+	n.core = C.int(Core)
+	n.memory = C.int(Memory)
+	n.power = C.uint(Power)
+	if !C.SetCoreClock(busid, n.core) { return errors.New("Nvapi CoreClock Faild") }
+	if !C.SetMemoryClock(busid, n.memory) { return errors.New("Nvapi CoreClock Faild") }
+	if !C.SetPowerLimit(busid, n.power) { return errors.New("Nvapi CoreClock Faild") }
+	return nil
+}
+
 
 func (n *NvapiStruct) GetGpuinfo() (StringNvapiGpuinfo, error) {
 	var result StringNvapiGpuinfo
