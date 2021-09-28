@@ -42,6 +42,88 @@ typedef enum NV_RAM_Type
     LPDDR2,
     GDDR5X
 } NV_RAM_Type;
+typedef struct NV_GPU_PERF_PSTATES20_PARAM_DELTA
+{
+    int value;
+
+    struct
+    {
+        int min;
+        int max;
+    } valueRange;
+} NV_GPU_PERF_PSTATES20_PARAM_DELTA;
+
+typedef struct NV_GPU_PSTATE20_BASE_VOLTAGE_ENTRY
+{
+    unsigned int domainId;
+    unsigned int editable : 1;
+    unsigned int reserved : 31;
+    unsigned int voltageUV;
+    NV_GPU_PERF_PSTATES20_PARAM_DELTA voltageDeltaUV;
+} NV_GPU_PSTATE20_BASE_VOLTAGE_ENTRY;
+
+typedef struct NV_GPU_PSTATE20_CLOCK_ENTRY
+{
+    unsigned int domainId;
+    unsigned int typeId;
+    unsigned int editable : 1;
+    unsigned int reserved : 31;
+    NV_GPU_PERF_PSTATES20_PARAM_DELTA frequencyDeltaKHz;
+
+    union
+    {
+        struct
+        {
+            unsigned int frequencyKHz;
+        } single;
+
+        struct
+        {
+            unsigned int minFrequencyKHz;
+            unsigned int maxFrequencyKHz;
+            unsigned int domainId;
+            unsigned int minVoltageUV;
+            unsigned int maxVoltageUV;
+        } range;
+    } data;
+} NV_GPU_PSTATE20_CLOCK_ENTRY;
+typedef struct NV_GPU_PERF_PSTATES20_INFO
+{
+    unsigned int version;
+    unsigned int editable : 1;
+    unsigned int reserved : 31;
+    unsigned int numPStates;
+    unsigned int numClocks;
+    unsigned int numBaseVoltages;
+
+    struct
+    {
+        unsigned int pStateId;
+        unsigned int editable : 1;
+        unsigned int reserved : 31;
+        NV_GPU_PSTATE20_CLOCK_ENTRY clocks[8];
+        NV_GPU_PSTATE20_BASE_VOLTAGE_ENTRY baseVoltages[4];
+    } pStates[16];
+
+    struct overVoltage
+    {
+        unsigned int numVoltages;
+        NV_GPU_PSTATE20_BASE_VOLTAGE_ENTRY voltages[4];
+    } overVoltage;
+} NV_GPU_PERF_PSTATES20_INFO;
+typedef struct NV_GPU_POWER_STATUS
+{
+    unsigned int version;
+    unsigned int count;
+
+    struct
+    {
+        unsigned int unknown1;
+        unsigned int unknown2;
+        unsigned int power;
+        unsigned int unknown3;
+    } entries[4];
+} NV_GPU_POWER_STATUS;
 
 void* (__cdecl *NvAPI_QueryInterface)(unsigned int offset);
 int (__cdecl *NvAPI_Initialize)();
@@ -51,6 +133,8 @@ int (__cdecl *NvAPI_GPU_GetBusId)(void *gpuHandle, unsigned int *busId);
 int (__cdecl *NvAPI_GPU_GetRamMaker)(void *gpuHandle, NV_RAM_MAKER *maker);
 int (__cdecl *NvAPI_GPU_GetFullName)(void *gpuHandle, NvAPI_ShortString *name);
 int (__cdecl *NvAPI_GPU_GetRamType)(void *gpuHandle, NV_RAM_Type *type);
+int (__cdecl *NvAPI_GPU_SetPstates20)(void *gpuHandle, NV_GPU_PERF_PSTATES20_INFO *pStatesInfo);
+int (__cdecl *NvAPI_GPU_ClientPowerPoliciesSetStatus)(void *gpuHandle, NV_GPU_POWER_STATUS *powerStatus);
 
 void *NvApiGpuHandles[128];
 void *handles[64];
@@ -61,9 +145,13 @@ unsigned int BusId;
 bool Initialize();
 bool Unload();
 bool EnumGpus();
-bool GetBusId(unsigned int budid,int Index);
+bool GetBusId(OUT unsigned int* budid,int Index);
 void GetAllBusId();
 bool GetGpuInfo(OUT char *data, int Index);
+bool SetCoreClock(unsigned busId, int Clock);
+bool SetMemoryClock(unsigned busId, int Clock);
+bool SetPowerLimit(unsigned busId, unsigned int power);
+bool SetOverClock(unsigned int busId, int Core, int Memory, unsigned int Power);
 
 #ifdef __cplusplus
 }
@@ -93,6 +181,8 @@ bool Initialize() {
             NvAPI_GPU_GetRamMaker = (int (__cdecl *)(void*, NV_RAM_MAKER* )) NvAPI_QueryInterface(0x42AEA16A);
             NvAPI_GPU_GetFullName = (int (__cdecl *)(void*, NvAPI_ShortString*)) NvAPI_QueryInterface(0xCEEE8E9F);
             NvAPI_GPU_GetRamType =  (int (__cdecl *)(void*, NV_RAM_Type*)) NvAPI_QueryInterface(0x57F7CAAC);
+            NvAPI_GPU_SetPstates20 = (int (__cdecl*)(void*, NV_GPU_PERF_PSTATES20_INFO*)) NvAPI_QueryInterface(0x0F4DAE6B);
+            NvAPI_GPU_ClientPowerPoliciesSetStatus = (int (__cdecl*)(void*, NV_GPU_POWER_STATUS*)) NvAPI_QueryInterface(0xAD95F5ED);
         }
     }
 
@@ -118,12 +208,12 @@ bool EnumGpus() {
     return false;
 }
 
-bool GetBusId(unsigned int budid, int Index) {
+bool GetBusId(OUT unsigned int* budid, int Index) {
     if (!NvAPI_GPU_GetBusId) {return false;}
     int result = -1;
-    result = NvAPI_GPU_GetBusId(handles[Index], &budid);
+    result = NvAPI_GPU_GetBusId(handles[Index], budid);
     if (result == 0) {
-        NvApiGpuHandles[BusId] = handles[Index];
+        NvApiGpuHandles[*budid] = handles[Index];
         return true;
     }
     return false;
@@ -162,5 +252,68 @@ bool GetGpuInfo(OUT char *data,  int Index) {
         return false;
     }
     sprintf(data, R"({"name":"%s", "maker":%d, "type":%d})", nvApiShortString, ramMaker, ramType);
+    return true;
+}
+bool SetCoreClock(unsigned int Busid, int Clock) {
+    if (!NvAPI_GPU_SetPstates20) return false;
+    int result = -1;
+    NV_GPU_PERF_PSTATES20_INFO pStatesInfo;
+    pStatesInfo.version = MAKE_NVAPI_VERSION(pStatesInfo, 2);
+    pStatesInfo.numPStates = 1;
+    pStatesInfo.numClocks = 1;
+    pStatesInfo.pStates[0].pStateId = 0;
+    pStatesInfo.pStates[0].clocks[0].domainId = 0;
+    pStatesInfo.pStates[0].clocks[0].typeId = 0;
+    pStatesInfo.pStates[0].clocks[0].frequencyDeltaKHz.value = Clock * 1000;
+    result = NvAPI_GPU_SetPstates20(NvApiGpuHandles[Busid], &pStatesInfo);
+//    printf("core overclock : %d\n", result);
+    if (result == 0) {
+        return true;
+    }
+    return false;
+}
+bool SetMemoryClock(unsigned int Busid, int Clock) {
+    if (!NvAPI_GPU_SetPstates20) return false;
+    int result = -1;
+    NV_GPU_PERF_PSTATES20_INFO pStatesInfo;
+    pStatesInfo.version = MAKE_NVAPI_VERSION(pStatesInfo, 2);
+    pStatesInfo.numPStates = 1;
+    pStatesInfo.numClocks = 1;
+    pStatesInfo.pStates[0].pStateId = 0;
+    pStatesInfo.pStates[0].clocks[0].domainId = 4;
+    pStatesInfo.pStates[0].clocks[0].typeId = 0;
+    pStatesInfo.pStates[0].clocks[0].frequencyDeltaKHz.value = Clock * 1000;
+
+    result = NvAPI_GPU_SetPstates20(NvApiGpuHandles[Busid], &pStatesInfo);
+    if (result != 0) {
+        return false;
+    }
+    return true;
+}
+bool SetPowerLimit(unsigned int Busid, unsigned int power) {
+    if (!NvAPI_GPU_ClientPowerPoliciesSetStatus) return false;
+    int result = -1;
+    NV_GPU_POWER_STATUS powerStatus;
+
+    powerStatus.version = MAKE_NVAPI_VERSION(powerStatus, 1);
+    powerStatus.count = 1;
+    powerStatus.entries[0].unknown1 = 0;
+    powerStatus.entries[0].power = power * 1000;
+    result = NvAPI_GPU_ClientPowerPoliciesSetStatus(NvApiGpuHandles[Busid], &powerStatus);
+    if (result != 0) {
+        return false;
+    }
+    return true;
+
+}
+
+bool SetOverClock(unsigned int busId, int Core, int Memory, unsigned int Power) {
+printf("1\n");
+    if (!SetCoreClock(busId, Core)) {return false;}
+    printf("2\n");
+    if (!SetMemoryClock(busId, Memory)) {return false;}
+    printf("3\n");
+    if (!SetPowerLimit(busId, Power)) {return false;}
+    printf("4\n");
     return true;
 }
