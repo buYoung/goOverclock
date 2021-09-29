@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
-	"time"
+	"os"
 )
 
 // Thank you for https://github.com/Demion/nvapioc
@@ -18,25 +18,24 @@ func main() {
 	if err != nil {
 		log.Println(err)
 	}
-
 	data, err := d.GetGpuinfo()
 	if err != nil {
 		log.Println(err)
 	}
-	log.Println("check overclock")
-	for {
-		err = d.SetOverclock(0, 0, 100)
-		if err != nil {
-			log.Println(err)
-			d.Initialize()
-		}
-		time.Sleep(time.Second * 5)
+	log.Printf("GPU Info Name : %s Maker : %s Type : %s", data.Name, data.Maker, data.Type)
+
+	err = d.SetOverclock(0, 0, 100)
+	if err != nil {
+		log.Println(err)
+		d.Initialize()
+	} else {
+		log.Println("suc oc")
 	}
 	err = d.Unload()
 	if err != nil {
 		log.Println(err)
 	}
-	log.Println("result",data)
+	os.Exit(0)
 }
 
 type NvapiGpuinfo struct {
@@ -54,9 +53,9 @@ type NvapiStruct struct {
 	isInitialize bool
 	BusId C.uint
 	gpuinfo *C.char
-	core C.int
-	memory C.int
-	power C.uint
+	//core C.int
+	//memory C.int
+	//power C.uint
 }
 
 func (n *NvapiStruct) Initialize() error {
@@ -69,9 +68,9 @@ func (n *NvapiStruct) Initialize() error {
 	n.BusId = C.uint(busid)
 	n.isInitialize = true
 	n.gpuinfo = C.CString("")
-	n.core = C.int(-1)
-	n.memory = C.int(-1)
-	n.power = C.uint(0)
+	//n.core = C.int(-1)
+	//n.memory = C.int(-1)
+	//n.power = C.uint(0)
 	return nil
 }
 func (n *NvapiStruct) Unload() error {
@@ -83,12 +82,16 @@ func (n *NvapiStruct) SetOverclock(Core int, Memory int, Power int, Busid ...uin
 	if len(Busid) == 1 {
 		busid = C.uint(Busid[0])
 	}
-	n.core = C.int(Core)
-	n.memory = C.int(Memory)
-	n.power = C.uint(Power)
-	if !C.SetCoreClock(busid, n.core) { return errors.New("Nvapi CoreClock Faild") }
-	if !C.SetMemoryClock(busid, n.memory) { return errors.New("Nvapi CoreClock Faild") }
-	if !C.SetPowerLimit(busid, n.power) { return errors.New("Nvapi CoreClock Faild") }
+	//n.core = C.int(Core)
+	//n.memory = C.int(Memory)
+	//n.power = C.uint(uint(Power))
+	core := C.SetCoreClock(busid, C.int(Core))
+	memory := C.SetMemoryClock(busid, C.int(Memory))
+	power := C.SetPowerLimit(busid, C.uint(uint(Power)))
+	log.Printf("core : %d memory : %d power : %d", core, memory, power)
+	if core != 0 { return errors.New("Nvapi CoreClock Faild") }
+	if memory != 0 { return errors.New("Nvapi CoreClock Faild") }
+	if power != 0 { return errors.New("Nvapi CoreClock Faild") }
 	return nil
 }
 
