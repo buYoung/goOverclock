@@ -4,13 +4,40 @@
 #include <string.h>
 #include <time.h>
 #include <stdbool.h>
+#pragma pack(push,8) // Make sure we have consistent structure packings
 #ifdef __cplusplus
 extern "C" {
 #endif
-#define MAKE_NVAPI_VERSION(type, version) ((unsigned int)(sizeof(type) | ((version) << 16)))
+#define MAKE_NVAPI_VERSION(typeName,ver) (NvU32)(sizeof(typeName) | ((ver)<<16))
+#define GET_NVAPI_VERSION(ver) (NvU32)((ver)>>16)
+#define GET_NVAPI_SIZE(ver) (NvU32)((ver) & 0xffff)
 #define NVAPI_GENERIC_STRING_MAX    4096
 #define NVAPI_LONG_STRING_MAX       256
 #define NVAPI_SHORT_STRING_MAX      64
+#define NVAPI_MAX_PHYSICAL_GPUS             64
+#define NVAPI_MAX_LOGICAL_GPUS              64
+#define NV_DECLARE_HANDLE(name) struct name##__ { int unused; }; typedef struct name##__ *name
+/* 64-bit types for compilers that support them, plus some obsolete variants */
+#if defined(__GNUC__) || defined(__arm) || defined(__IAR_SYSTEMS_ICC__) || defined(__ghs__) || defined(_WIN64)
+typedef unsigned long long NvU64; /* 0 to 18446744073709551615          */
+#else
+typedef unsigned __int64   NvU64; /* 0 to 18446744073709551615              */
+#endif
+
+// mac os 32-bit still needs this
+#if (defined(macintosh) || defined(__APPLE__)) && !defined(__LP64__)
+typedef signed long        NvS32; /* -2147483648 to 2147483647               */
+#else
+typedef signed int         NvS32; /* -2147483648 to 2147483647               */
+#endif
+
+NV_DECLARE_HANDLE(NvLogicalGpuHandle);         // One or more physical GPUs acting in concert (SLI)
+NV_DECLARE_HANDLE(NvPhysicalGpuHandle);        // A single physical GPU
+
+typedef unsigned long    NvU32;
+typedef unsigned short   NvU16;
+typedef unsigned char    NvU8;
+
 typedef char NvAPI_String[NVAPI_GENERIC_STRING_MAX];
 typedef char NvAPI_LongString[NVAPI_LONG_STRING_MAX];
 typedef char NvAPI_ShortString[NVAPI_SHORT_STRING_MAX];
@@ -113,34 +140,37 @@ typedef struct NV_GPU_PERF_PSTATES20_INFO
 } NV_GPU_PERF_PSTATES20_INFO;
 typedef struct NV_GPU_POWER_STATUS
 {
-    unsigned int version;
-    unsigned int count;
+    NvU32 version;
+    NvU32 count;
 
     struct
     {
-        unsigned int unknown1;
-        unsigned int unknown2;
-        unsigned int power;
-        unsigned int unknown3;
+        NvU32 unknown1;
+        NvU32 unknown2;
+        NvU32 power;
+        NvU32 unknown3;
     } entries[4];
 } NV_GPU_POWER_STATUS;
-
+#define NV_GPU_PERF_CLIENT_POWER_POLICIES_STATUS_VER MAKE_NVAPI_VERSION(NV_GPU_POWER_STATUS,1)
 void* (__cdecl *NvAPI_QueryInterface)(unsigned int offset);
 int (__cdecl *NvAPI_Initialize)();
 int (__cdecl *NvAPI_Unload)();
-int (__cdecl *NvAPI_EnumPhysicalGPUs)(void **gpuHandles, unsigned int *gpuCount);
-int (__cdecl *NvAPI_GPU_GetBusId)(void *gpuHandle, unsigned int *busId);
-int (__cdecl *NvAPI_GPU_GetRamMaker)(void *gpuHandle, NV_RAM_MAKER *maker);
-int (__cdecl *NvAPI_GPU_GetFullName)(void *gpuHandle, NvAPI_ShortString *name);
-int (__cdecl *NvAPI_GPU_GetRamType)(void *gpuHandle, NV_RAM_Type *type);
-int (__cdecl *NvAPI_GPU_SetPstates20)(void *gpuHandle, NV_GPU_PERF_PSTATES20_INFO *pStatesInfo);
-int (__cdecl *NvAPI_GPU_ClientPowerPoliciesSetStatus)(void *gpuHandle, NV_GPU_POWER_STATUS *powerStatus);
+int (__cdecl *NvAPI_EnumPhysicalGPUs)(NvPhysicalGpuHandle nvGPUHandle[NVAPI_MAX_PHYSICAL_GPUS], NvU32 *gpuCount);
+int (__cdecl *NvAPI_GPU_GetBusId)(NvPhysicalGpuHandle gpuHandle, NvU32 *busId);
+int (__cdecl *NvAPI_GPU_GetRamMaker)(NvPhysicalGpuHandle gpuHandle, NV_RAM_MAKER *maker);
+int (__cdecl *NvAPI_GPU_GetFullName)(NvPhysicalGpuHandle gpuHandle, NvAPI_ShortString *name);
+int (__cdecl *NvAPI_GPU_GetRamType)(NvPhysicalGpuHandle gpuHandle, NV_RAM_Type *type);
+int (__cdecl *NvAPI_GPU_SetPstates20)(NvPhysicalGpuHandle gpuHandle, NV_GPU_PERF_PSTATES20_INFO *pStatesInfo);
+int (__cdecl *NvAPI_GPU_ClientPowerPoliciesSetStatus)(NvPhysicalGpuHandle gpuHandle, NV_GPU_POWER_STATUS *powerStatus);
+
+NvPhysicalGpuHandle NvPhysicalGpuHandle__[NVAPI_MAX_PHYSICAL_GPUS];
+
 
 void *NvApiGpuHandles[128];
 void *handles[64];
 
-unsigned int GpuCount;
-unsigned int BusId;
+NvU32 GpuCount;
+NvU32 BusId;
 
 bool Initialize();
 bool Unload();
@@ -148,9 +178,9 @@ bool EnumGpus();
 bool GetBusId(OUT unsigned int* budid,int Index);
 void GetAllBusId();
 bool GetGpuInfo(OUT char *data, int Index);
-bool SetCoreClock(unsigned busId, int Clock);
-bool SetMemoryClock(unsigned busId, int Clock);
-bool SetPowerLimit(unsigned busId, unsigned int power);
+int SetCoreClock(unsigned busId, int Clock);
+int SetMemoryClock(unsigned busId, int Clock);
+int SetPowerLimit(unsigned busId, unsigned int power);
 bool SetOverClock(unsigned int busId, int Core, int Memory, unsigned int Power);
 
 #ifdef __cplusplus
@@ -176,13 +206,13 @@ bool Initialize() {
         {
             NvAPI_Initialize = (int (__cdecl *)()) NvAPI_QueryInterface(0x0150E828);
             NvAPI_Unload = (int (__cdecl*)()) NvAPI_QueryInterface(0xD22BDD7E);
-            NvAPI_EnumPhysicalGPUs = (int (__cdecl*)(void**, unsigned int*)) NvAPI_QueryInterface(0xE5AC921F);
-            NvAPI_GPU_GetBusId = (int (__cdecl *)(void*, unsigned int*)) NvAPI_QueryInterface(0x1BE0B8E5);
-            NvAPI_GPU_GetRamMaker = (int (__cdecl *)(void*, NV_RAM_MAKER* )) NvAPI_QueryInterface(0x42AEA16A);
-            NvAPI_GPU_GetFullName = (int (__cdecl *)(void*, NvAPI_ShortString*)) NvAPI_QueryInterface(0xCEEE8E9F);
-            NvAPI_GPU_GetRamType =  (int (__cdecl *)(void*, NV_RAM_Type*)) NvAPI_QueryInterface(0x57F7CAAC);
-            NvAPI_GPU_SetPstates20 = (int (__cdecl*)(void*, NV_GPU_PERF_PSTATES20_INFO*)) NvAPI_QueryInterface(0x0F4DAE6B);
-            NvAPI_GPU_ClientPowerPoliciesSetStatus = (int (__cdecl*)(void*, NV_GPU_POWER_STATUS*)) NvAPI_QueryInterface(0xAD95F5ED);
+            NvAPI_EnumPhysicalGPUs = (int (__cdecl*)(NvPhysicalGpuHandle*, NvU32*)) NvAPI_QueryInterface(0xE5AC921F);
+            NvAPI_GPU_GetBusId = (int (__cdecl *)(NvPhysicalGpuHandle, NvU32*)) NvAPI_QueryInterface(0x1BE0B8E5);
+            NvAPI_GPU_GetRamMaker = (int (__cdecl *)(NvPhysicalGpuHandle, NV_RAM_MAKER* )) NvAPI_QueryInterface(0x42AEA16A);
+            NvAPI_GPU_GetFullName = (int (__cdecl *)(NvPhysicalGpuHandle, NvAPI_ShortString*)) NvAPI_QueryInterface(0xCEEE8E9F);
+            NvAPI_GPU_GetRamType =  (int (__cdecl *)(NvPhysicalGpuHandle, NV_RAM_Type*)) NvAPI_QueryInterface(0x57F7CAAC);
+            NvAPI_GPU_SetPstates20 = (int (__cdecl*)(NvPhysicalGpuHandle, NV_GPU_PERF_PSTATES20_INFO*)) NvAPI_QueryInterface(0x0F4DAE6B);
+            NvAPI_GPU_ClientPowerPoliciesSetStatus = (int (__cdecl*)(NvPhysicalGpuHandle, NV_GPU_POWER_STATUS*)) NvAPI_QueryInterface(0xAD95F5ED);
         }
     }
 
@@ -203,7 +233,7 @@ bool Unload() {
 bool EnumGpus() {
     int result = -1;
     if (!NvAPI_EnumPhysicalGPUs) {return false;}
-    result = NvAPI_EnumPhysicalGPUs(handles, &GpuCount);
+    result = NvAPI_EnumPhysicalGPUs(NvPhysicalGpuHandle__, &GpuCount);
     if (result == 0) {return true;}
     return false;
 }
@@ -211,20 +241,21 @@ bool EnumGpus() {
 bool GetBusId(OUT unsigned int* budid, int Index) {
     if (!NvAPI_GPU_GetBusId) {return false;}
     int result = -1;
-    result = NvAPI_GPU_GetBusId(handles[Index], budid);
+    result = NvAPI_GPU_GetBusId(NvPhysicalGpuHandle__[Index], (NvU32*)budid);
     if (result == 0) {
-        NvApiGpuHandles[*budid] = handles[Index];
+        NvPhysicalGpuHandle__[*budid] = NvPhysicalGpuHandle__[Index];
         return true;
     }
+    printf("result : %d\n", result);
     return false;
 }
 void GetAllBusId() {
     if (!NvAPI_GPU_GetBusId) {return;}
     int result = -1;
     for (unsigned int i = 0; i < GpuCount; ++i) {
-        result = NvAPI_GPU_GetBusId(handles[i], &BusId);
+        result = NvAPI_GPU_GetBusId(NvPhysicalGpuHandle__[i], &BusId);
         if (result == 0) {
-            NvApiGpuHandles[BusId] = handles[i];
+            NvPhysicalGpuHandle__[BusId] = NvPhysicalGpuHandle__[i];
         }
     }
 }
@@ -239,25 +270,24 @@ bool GetGpuInfo(OUT char *data,  int Index) {
     NV_RAM_Type ramType;
     NvAPI_ShortString nvApiShortString;
 
-    result = NvAPI_GPU_GetRamMaker(handles[Index], &ramMaker);
+    result = NvAPI_GPU_GetRamMaker(NvPhysicalGpuHandle__[Index], &ramMaker);
     if (result != 0) {
         return false;
     }
-    result = NvAPI_GPU_GetRamType(handles[Index], &ramType);
+    result = NvAPI_GPU_GetRamType(NvPhysicalGpuHandle__[Index], &ramType);
     if (result != 0) {
         return false;
     }
-    result = NvAPI_GPU_GetFullName(handles[Index], &nvApiShortString);
+    result = NvAPI_GPU_GetFullName(NvPhysicalGpuHandle__[Index], &nvApiShortString);
     if (result != 0) {
         return false;
     }
     sprintf(data, R"({"name":"%s", "maker":%d, "type":%d})", nvApiShortString, ramMaker, ramType);
     return true;
 }
-bool SetCoreClock(unsigned int Busid, int Clock) {
+int SetCoreClock(unsigned int Busid, int Clock) {
     if (!NvAPI_GPU_SetPstates20) return false;
-    int result = -1;
-    NV_GPU_PERF_PSTATES20_INFO pStatesInfo;
+    NV_GPU_PERF_PSTATES20_INFO pStatesInfo = { 0 };
     pStatesInfo.version = MAKE_NVAPI_VERSION(pStatesInfo, 2);
     pStatesInfo.numPStates = 1;
     pStatesInfo.numClocks = 1;
@@ -265,17 +295,12 @@ bool SetCoreClock(unsigned int Busid, int Clock) {
     pStatesInfo.pStates[0].clocks[0].domainId = 0;
     pStatesInfo.pStates[0].clocks[0].typeId = 0;
     pStatesInfo.pStates[0].clocks[0].frequencyDeltaKHz.value = Clock * 1000;
-    result = NvAPI_GPU_SetPstates20(NvApiGpuHandles[Busid], &pStatesInfo);
-//    printf("core overclock : %d\n", result);
-    if (result == 0) {
-        return true;
-    }
-    return false;
+
+    return NvAPI_GPU_SetPstates20(NvPhysicalGpuHandle__[Busid], &pStatesInfo);;
 }
-bool SetMemoryClock(unsigned int Busid, int Clock) {
+int SetMemoryClock(unsigned int Busid, int Clock) {
     if (!NvAPI_GPU_SetPstates20) return false;
-    int result = -1;
-    NV_GPU_PERF_PSTATES20_INFO pStatesInfo;
+    NV_GPU_PERF_PSTATES20_INFO pStatesInfo = { 0 };
     pStatesInfo.version = MAKE_NVAPI_VERSION(pStatesInfo, 2);
     pStatesInfo.numPStates = 1;
     pStatesInfo.numClocks = 1;
@@ -284,36 +309,26 @@ bool SetMemoryClock(unsigned int Busid, int Clock) {
     pStatesInfo.pStates[0].clocks[0].typeId = 0;
     pStatesInfo.pStates[0].clocks[0].frequencyDeltaKHz.value = Clock * 1000;
 
-    result = NvAPI_GPU_SetPstates20(NvApiGpuHandles[Busid], &pStatesInfo);
-    if (result != 0) {
-        return false;
-    }
-    return true;
+
+    return NvAPI_GPU_SetPstates20(NvPhysicalGpuHandle__[Busid], &pStatesInfo);;
 }
-bool SetPowerLimit(unsigned int Busid, unsigned int power) {
+int SetPowerLimit(unsigned int Busid, unsigned int power) {
     if (!NvAPI_GPU_ClientPowerPoliciesSetStatus) return false;
-    int result = -1;
-    NV_GPU_POWER_STATUS powerStatus;
+    NV_GPU_POWER_STATUS powerStatus = { 0 };
 
-    powerStatus.version = MAKE_NVAPI_VERSION(powerStatus, 1);
+    powerStatus.version = NV_GPU_PERF_CLIENT_POWER_POLICIES_STATUS_VER;
     powerStatus.count = 1;
-    powerStatus.entries[0].unknown1 = 0;
     powerStatus.entries[0].power = power * 1000;
-    result = NvAPI_GPU_ClientPowerPoliciesSetStatus(NvApiGpuHandles[Busid], &powerStatus);
-    if (result != 0) {
-        return false;
-    }
-    return true;
-
+    return NvAPI_GPU_ClientPowerPoliciesSetStatus(NvPhysicalGpuHandle__[Busid], &powerStatus);;
 }
 
 bool SetOverClock(unsigned int busId, int Core, int Memory, unsigned int Power) {
-printf("1\n");
-    if (!SetCoreClock(busId, Core)) {return false;}
-    printf("2\n");
-    if (!SetMemoryClock(busId, Memory)) {return false;}
-    printf("3\n");
-    if (!SetPowerLimit(busId, Power)) {return false;}
-    printf("4\n");
+
+    int core = SetCoreClock(busId, Core);
+    int memory = SetMemoryClock(busId, Memory);
+    int power = SetPowerLimit(busId, Power);
+    if (core != 0) {return false;}
+    if (memory != 0) {return false;}
+    if (power != 0) {return false;}
     return true;
 }
